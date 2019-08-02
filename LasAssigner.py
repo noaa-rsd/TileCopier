@@ -11,7 +11,7 @@ def main():
     dir_to = arcpy.GetParameterAsText(3)
 
     assigned_tiles = []
-    with arcpy.da.SearchCursor("FL1806_Block_01_AOIs", ['reviewer', 'Tile_ID']) as tiles:
+    with arcpy.da.SearchCursor(shp, ['reviewer', 'Tile_ID']) as tiles:
         for tile in tiles:
             if tile[0] == reviewer:
                 assigned_tiles.append(tile)
