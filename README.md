@@ -4,4 +4,4 @@ LAS Copier copies to a local directory the LAS tiles assigned to the specified r
 
 NOTE:  Currently, only compatible with ArcMap.
 
-.. immage:  
+.. immage:: ./support_files/ExampleAssignmentShapefile.PNG
