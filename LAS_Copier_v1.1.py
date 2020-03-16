@@ -178,6 +178,7 @@ def main():
         tile_copier.update_status_shp()
 
     del tile_copier.tile_cursor
+    tile_copier.summary()
 
 
 if __name__ == '__main__':
