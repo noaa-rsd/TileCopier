@@ -1,5 +1,6 @@
 import os
 from shutil import copyfile
+import pandas as pd
 import arcpy
 import datetime
 import subprocess
@@ -20,6 +21,13 @@ class TileCopier:
         self.dem_to = arcpy.GetParameterAsText(8)
 
         self.shp_srs = arcpy.Describe(self.shp).spatialReference
+
+        self.source_fields = ['SHAPE@WKT', 
+                              'reviewer', 
+                              'Tile_ID', 
+                              'LAS_Name', 
+                              'DEM_Name']
+
         self.export_tile_fields = collections.OrderedDict([
             ('reviewer', 'TEXT'), 
             ('tile_id', 'TEXT'), 
@@ -33,7 +41,10 @@ class TileCopier:
             ('dem_to', 'TEXT'), 
             ('dem_copied', 'TEXT')
             ])
-        self.tile = None
+
+        self.assigned_tiles = []
+        self.copied_tiles = []
+        self.num_tiles = 0
         self.created_pyramid = False
         self.las_copied = False  # default, change if copied
         self.dem_copied = False  # default, change if copied
@@ -46,26 +57,26 @@ class TileCopier:
         self.las_name = tile[3] + '.las'
         self.dem_name = tile[4] + '.img'
 
-    def get_tiles(self):
-        assigned_tiles = []
-        fields = ['SHAPE@WKT', 'reviewer', 'Tile_ID', 'LAS_Name', 'DEM_Name']
-        with arcpy.da.SearchCursor(self.shp, fields) as tiles:
+    def get_assigned_tiles(self):
+        with arcpy.da.SearchCursor(self.shp, self.source_fields) as tiles:
             for tile in tiles:
                 if tile[1] == self.reviewer:
-                    assigned_tiles.append(tile)
+                    self.assigned_tiles.append(tile)
 
-        num_tiles = len(assigned_tiles)
-        arcpy.AddMessage(r"{}, you've got {} tiles assigned to you.".format(self.reviewer, num_tiles))
-        return assigned_tiles, num_tiles
+        self.num_tiles = len(self.assigned_tiles)
+        arcpy.AddMessage(r"{} has {} assigned tiles".format(self.reviewer, self.num_tiles))
 
-    def create_copied_tile_status_shp(self):
+    def create_results_shp(self):
         shp_processed_dir = os.path.dirname(self.shp.value)
-        shp_processed_name = os.path.basename(self.shp.value).replace('.shp', '_TileCopierResults.shp')
+        shp_basename = os.path.basename(self.shp.value)
+        shp_processed_name = shp_basename.replace('.shp', '_TileCopierResults.shp')
+
         arcpy.CreateFeatureclass_management(shp_processed_dir, 
                                             shp_processed_name,
                                             spatial_reference=self.shp_srs)
 
         shp_processed_path = os.path.join(shp_processed_dir, shp_processed_name)
+
         for field, dtype in self.export_tile_fields.items():
             arcpy.AddField_management(shp_processed_path, field, dtype)
 
@@ -74,7 +85,8 @@ class TileCopier:
 
     @staticmethod
     def run_console_cmd(cmd, las_tile):
-        process = subprocess.Popen(cmd.split('|'), stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+        process = subprocess.Popen(cmd.split('|'), stdout=subprocess.PIPE, 
+                                   stderr=subprocess.PIPE, shell=True)
         output, error = process.communicate()
         return output, error
     
@@ -110,11 +122,13 @@ class TileCopier:
                 copyfile(las_path_from, las_path_to)
                 self.las_copied = True
                 if self.to_pyramid:
-                    tile_status = 'pyramiding {} ({} of {})'.format(las_name, i, num_tiles)
-                    arcpy.SetProgressorLabel(tile_status)
-                    self.created_pyramid = create_las_pyramids(thin_factor, las_path_to, lp360_path)
+                    arcpy.AddMessage('pyramiding...')
+                    self.created_pyramid = create_las_pyramids(thin_factor, 
+                                                               las_path_to, 
+                                                               lp360_path)
         except Exception as e:
-            arcpy.AddError(e)
+            arcpy.AddMessage(e)
+            self.las_copied = False
 
     def copy_dem(self):
         dem_path_from = os.path.join(self.dem_from, self.dem_name)
@@ -124,37 +138,46 @@ class TileCopier:
                 copyfile(dem_path_from, dem_path_to)
                 self.dem_copied = True
         except Exception as e:
-            arcpy.AddError(e)
+            arcpy.AddMessage(e)
+            self.dem_copied = False
 
     def update_status_shp(self):
         tile_data = (arcpy.FromWKT(self.tile_geom, self.shp_srs), 
                      self.oid, self.reviewer, self.tile_id, 
                      self.las_name, self.las_from, self.las_to, 
-                     str(self.las_copied), str(self.created_pyramid), 
+                     self.las_copied, self.created_pyramid, 
                      self.dem_name, self.dem_from, self.dem_to, 
-                     str(self.dem_copied))
+                     self.dem_copied)
+
         self.tile_cursor.insertRow(tile_data)
+        self.copied_tiles.append(tile_data[2:])  # don't add wkt or oid to pandas df
+
+    def summary(self):
+        df = pd.DataFrame(self.copied_tiles, columns=self.export_tile_fields)
+        num_las_copied = (df['las_copied'].astype('bool').sum())
+        num_dem_copied = (df['dem_copied'].astype('bool').sum())
+        arcpy.AddMessage('-------------------- SUMMARY --------------------')
+        arcpy.AddMessage(r'Number of Assigned Tiles:    {}'.format(self.num_tiles))
+        arcpy.AddMessage(r'Number of Copied LAS files:  {}'.format(num_las_copied))
+        arcpy.AddMessage(r'Number of Copied DEM files:  {}'.format(num_dem_copied))
 
 
 def main():
     tile_copier = TileCopier()
-    assigned_tiles, num_tiles = tile_copier.get_tiles()
-    tile_copier.create_copied_tile_status_shp()
-    arcpy.SetProgressor("step", "Copying tile data...", 0, num_tiles, 1)
+    tile_copier.get_assigned_tiles()
+    tile_copier.create_results_shp()
 
-    for i, tile in enumerate(assigned_tiles, 1):
+    for i, tile in enumerate(tile_copier.assigned_tiles, 1):
         tile_copier.set_current_tile(tile, i)
-        tile_status = 'tile {} ({} of {})'.format(tile_copier.tile_id, i, num_tiles)
-        arcpy.SetProgressorLabel(tile_status)
+        tile_status = 'copying data from tile {} ({} of {})'.format(
+            tile_copier.tile_id, i, tile_copier.num_tiles)
+        arcpy.AddMessage(tile_status)
 
         tile_copier.copy_las()
         tile_copier.copy_dem()
-
-        arcpy.SetProgressorPosition()
         tile_copier.update_status_shp()
 
     del tile_copier.tile_cursor
-    arcpy.ResetProgressor()
 
 
 if __name__ == '__main__':
