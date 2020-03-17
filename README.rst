@@ -1,8 +1,8 @@
-Las Copier
-----------
+Tile Copier
+-----------
 
-LAS Copier copies to a local directory the LAS tiles assigned to the specified reviewer. The list of available reviewers is read from the "Reviewer" attribute in specified tile-assignment shapefile.
+Tile Copier copies the LAS and/or DEM files associated with the tiles assigned to the specified reviewer. The list of available reviewers is read from the "Reviewer" attribute in specified tile-assignment shapefile.
 
-NOTE:  Currently, only compatible with ArcMap.
+NOTE:  Tile Copier v2.0 is compatible with both ArcMap and ArcPro, but future versions will work with ArcPro only.
 
 .. image:: ./support_files/Gui.png
